@@ -210,12 +210,19 @@ export function Canvas() {
   const drawCursor = useCallback((x: number, y: number) => {
     const cv  = cursorRef.current!
     const ctx = cv.getContext('2d')!
-    // clear only previous cursor area
-    const prev = cursorBoundsRef.current
-    if (prev) ctx.clearRect(prev.x, prev.y, prev.w, prev.h)
+    // Clear the previous cursor rect. Use the UNION of old and new bounds so a
+    // size change mid-hover doesn't leave the old (larger) cursor visible.
     const r   = Math.max(sizeRef.current / 2, 1)
     const pad = 4
-    cursorBoundsRef.current = { x: x-r-pad-2, y: y-r-pad-22, w: r*2+pad*2+22, h: r*2+pad*2+44 }
+    const next = { x: x-r-pad-2, y: y-r-pad-22, w: r*2+pad*2+22, h: r*2+pad*2+44 }
+    const prev = cursorBoundsRef.current
+    if (prev) {
+      const cx = Math.min(prev.x, next.x), cy = Math.min(prev.y, next.y)
+      ctx.clearRect(cx, cy,
+        Math.max(prev.x+prev.w, next.x+next.w) - cx,
+        Math.max(prev.y+prev.h, next.y+next.h) - cy)
+    }
+    cursorBoundsRef.current = next
 
     if (toolRef.current === 'eraser') {
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2)
@@ -264,17 +271,27 @@ export function Canvas() {
     const pv  = previewRef.current!
     const ctx = pv.getContext('2d')!
     const physSize = sizeRef.current
-    if (!pts.length) { ctx.clearRect(0,0,pv.width,pv.height); strokeBoundsRef.current=null; return }
-    // bounding-box clear — only erase the pixels the stroke actually covers
+
+    // Always clear the full preview canvas — dirty-rect partial clears cause
+    // ghosting artifacts because getStroke() paths can extend beyond the input
+    // point bounding box (smoothing/tapering pushes pixels outside it).
+    ctx.clearRect(0, 0, pv.width, pv.height)
+
+    if (!pts.length) { strokeBoundsRef.current = null; return }
+
+    // Track cumulative stroke bounds (used only by flushSegment → renderCompositeRect)
     const pad = physSize + 4
     let minX=pts[0][0], minY=pts[0][1], maxX=pts[0][0], maxY=pts[0][1]
     for (const [px,py] of pts) { if(px<minX)minX=px;if(px>maxX)maxX=px;if(py<minY)minY=py;if(py>maxY)maxY=py }
     const nb = { x: minX-pad, y: minY-pad, w: maxX-minX+pad*2, h: maxY-minY+pad*2 }
-    ctx.clearRect(nb.x, nb.y, nb.w, nb.h)
-    strokeBoundsRef.current = nb
+    const prev = strokeBoundsRef.current
+    strokeBoundsRef.current = prev ? {
+      x: Math.min(prev.x, nb.x), y: Math.min(prev.y, nb.y),
+      w: Math.max(prev.x+prev.w, nb.x+nb.w) - Math.min(prev.x, nb.x),
+      h: Math.max(prev.y+prev.h, nb.y+nb.h) - Math.min(prev.y, nb.y),
+    } : nb
 
     if (brushShapeRef.current==='square') {
-      if (!pts.length) return
       ctx.save(); ctx.fillStyle=ctx.strokeStyle=fillColor; ctx.lineWidth=physSize
       ctx.lineCap='square'; ctx.lineJoin='miter'
       if (pts.length===1) { ctx.fillRect(pts[0][0]-physSize/2,pts[0][1]-physSize/2,physSize,physSize) }
@@ -342,9 +359,13 @@ export function Canvas() {
 
   const flushSegment = useCallback((dirtyRect?: { x: number; y: number; w: number; h: number }) => {
     if (!isDrawing.current || !points.current.length) return
-    const last = points.current[points.current.length-1]
+    // Keep last 5 points as the continuation seed, with pressure=0.
+    // This prevents the 1-point gap that made getStroke() produce a broken/empty
+    // path right after a flush, causing the jitter / "wrong refresh rate" feel.
+    // pressure=0 tapers the seed to zero width → invisible double-draw on the layer.
+    const tail = points.current.slice(-5).map(([x,y]) => [x, y, 0] as [number,number,number])
     flushPreviewToLayer()
-    points.current = [last]
+    points.current = tail
     if (dirtyRect) renderCompositeRect(dirtyRect.x, dirtyRect.y, dirtyRect.w, dirtyRect.h)
     else renderComposite()
   }, [flushPreviewToLayer, renderComposite, renderCompositeRect])
