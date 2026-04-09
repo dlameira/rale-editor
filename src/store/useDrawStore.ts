@@ -39,6 +39,8 @@ interface DrawStore {
   moveLayerDown:       (id: string) => void
   reorderLayers:       (fromId: string, toIndex: number) => void
   setShowLayers:       (v: boolean) => void
+  setLayers:           (layers: LayerMeta[], activeId?: string) => void
+  setLayerOpacity:     (id: string, opacity: number) => void
 }
 
 const first = mkLayer('Layer 1')
@@ -115,4 +117,13 @@ export const useDrawStore = create<DrawStore>((set, get) => ({
   },
 
   setShowLayers: (showLayers) => set({ showLayers }),
+
+  setLayers: (layers, activeId) => set({
+    layers,
+    activeLayerId: activeId ?? layers[0]?.id ?? '',
+  }),
+
+  setLayerOpacity: (id, opacity) => set({
+    layers: get().layers.map(l => l.id === id ? { ...l, opacity } : l),
+  }),
 }))

@@ -1,16 +1,22 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { getStroke } from 'perfect-freehand'
 import { useDrawStore } from '../store/useDrawStore'
+import type { LayerMeta } from '../store/useDrawStore'
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// ─── constants ───────────────────────────────────────────────────────────────
 
-function drawDashedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, dpr: number) {
+const DOC_W = 3840
+const DOC_H = 2160
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+function drawDashedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
   ctx.save()
-  ctx.lineWidth = dpr
-  ctx.setLineDash([6 * dpr, 4 * dpr])
+  ctx.lineWidth = 1
+  ctx.setLineDash([6, 4])
   ctx.strokeStyle = 'rgba(0,0,0,0.7)'
   ctx.strokeRect(x, y, w, h)
-  ctx.lineDashOffset = 5 * dpr
+  ctx.lineDashOffset = 5
   ctx.strokeStyle = '#fff'
   ctx.strokeRect(x, y, w, h)
   ctx.restore()
@@ -79,7 +85,6 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
   }
 
   // expansão adaptativa: estima a cor do traço a partir dos vizinhos não-preenchidos
-  // e preenche pixels de borda que são majoritariamente a cor do target (α > 50%)
   const expandSmart = () => {
     for (let idx = 0; idx < width * height; idx++) {
       if (!visited[idx]) continue
@@ -95,7 +100,6 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
         const ni4 = nidx * 4
         const na  = data[ni4 + 3]
 
-        // pixel semi-transparente: preencher direto (fundo transparente do canvas)
         if (na > 0 && na < 230) {
           data[ni4] = fill[0]; data[ni4+1] = fill[1]; data[ni4+2] = fill[2]; data[ni4+3] = 255
           visited[nidx] = 1
@@ -103,7 +107,6 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
         }
         if (na < 128) continue
 
-        // pixel opaco de borda: estimar cor do traço pelos vizinhos não-preenchidos
         const cCol = nidx % width, cRow = Math.floor(nidx / width)
         const cn = [
           cCol > 0          ? nidx - 1      : -1,
@@ -116,7 +119,6 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
           if (nnidx < 0 || visited[nnidx]) continue
           const nn4 = nnidx * 4
           if (data[nn4 + 3] < 128) continue
-          // vizinho claramente diferente do target = cor do traço
           const d = Math.abs(data[nn4] - target[0]) + Math.abs(data[nn4+1] - target[1]) + Math.abs(data[nn4+2] - target[2])
           if (d > 60) { sR += data[nn4]; sG += data[nn4+1]; sB += data[nn4+2]; sN++ }
         }
@@ -125,7 +127,7 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
 
         const shouldFill = sN > 0
           ? dToTarget <= (Math.abs(data[ni4] - sR/sN) + Math.abs(data[ni4+1] - sG/sN) + Math.abs(data[ni4+2] - sB/sN))
-          : dToTarget <= 200  // sem vizinhos-traço detectados: tolerância generosa
+          : dToTarget <= 200
 
         if (shouldFill) {
           data[ni4] = fill[0]; data[ni4+1] = fill[1]; data[ni4+2] = fill[2]; data[ni4+3] = 255
@@ -135,7 +137,7 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
     }
   }
   expandSmart()
-  expandSmart()  // 2º passo captura pixels que ficaram acessíveis após o 1º
+  expandSmart()
   ctx.putImageData(img, 0, 0)
 }
 
@@ -149,6 +151,7 @@ export function Canvas() {
   const cursorRef    = useRef<HTMLCanvasElement>(null)
   const wrapperRef   = useRef<HTMLDivElement>(null)
   const overlayRef   = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const isDrawing  = useRef(false)
   const points     = useRef<[number, number, number][]>([])
@@ -170,7 +173,6 @@ export function Canvas() {
   const zoomRef = useRef(1)
   const panX    = useRef(0)
   const panY    = useRef(0)
-  const dprRef  = useRef(Math.max(1, window.devicePixelRatio || 1))
 
   const { tool, color, size, brushShape, layers } = useDrawStore()
   const toolRef       = useRef(tool)
@@ -209,12 +211,11 @@ export function Canvas() {
   // sync layer canvases when layers array changes
   useEffect(() => {
     const canvases = layerCanvasesRef.current
-    const dpr = dprRef.current
     for (const layer of layers) {
       if (!canvases.has(layer.id)) {
         const cv = document.createElement('canvas')
-        cv.width  = window.innerWidth  * dpr
-        cv.height = window.innerHeight * dpr
+        cv.width  = DOC_W
+        cv.height = DOC_H
         canvases.set(layer.id, cv)
       }
     }
@@ -230,27 +231,26 @@ export function Canvas() {
   const drawCursor = useCallback((x: number, y: number) => {
     const cv  = cursorRef.current!
     const ctx = cv.getContext('2d')!
-    const dpr = dprRef.current
     ctx.clearRect(0, 0, cv.width, cv.height)
-    const r = Math.max(sizeRef.current * dpr / 2, 1)
+    const r = Math.max(sizeRef.current / 2, 1)
 
     if (toolRef.current === 'eraser') {
       ctx.beginPath()
       ctx.arc(x, y, r, 0, Math.PI * 2)
       ctx.strokeStyle = 'rgba(255,255,255,0.7)'
-      ctx.lineWidth = 1.5 * dpr
+      ctx.lineWidth = 1.5
       ctx.stroke()
     } else if (toolRef.current === 'fill') {
-      const sq = 10 * dpr
+      const sq = 10
       ctx.fillStyle = colorRef.current
-      ctx.fillRect(x, y - 14 * dpr, sq, sq)
+      ctx.fillRect(x, y - 14, sq, sq)
       ctx.strokeStyle = 'rgba(255,255,255,0.4)'
-      ctx.lineWidth = dpr
-      ctx.strokeRect(x, y - 14 * dpr, sq, sq)
+      ctx.lineWidth = 1
+      ctx.strokeRect(x, y - 14, sq, sq)
     } else if (toolRef.current === 'line') {
-      const arm = 8 * dpr
+      const arm = 8
       ctx.strokeStyle = colorRef.current
-      ctx.lineWidth = dpr
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y)
       ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm)
@@ -258,14 +258,14 @@ export function Canvas() {
       if (lineStart.current) {
         const [lx, ly] = lineStart.current
         ctx.beginPath()
-        ctx.arc(lx, ly, 3 * dpr, 0, Math.PI * 2)
+        ctx.arc(lx, ly, 3, 0, Math.PI * 2)
         ctx.fillStyle = colorRef.current
         ctx.fill()
       }
     } else if (toolRef.current === 'select') {
-      const arm = 9 * dpr
+      const arm = 9
       ctx.strokeStyle = '#fff'
-      ctx.lineWidth = 1.5 * dpr
+      ctx.lineWidth = 1.5
       ctx.beginPath()
       ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y)
       ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm)
@@ -280,26 +280,26 @@ export function Canvas() {
           sampled = `rgb(${d[0]},${d[1]},${d[2]})`
         }
       }
-      const sq = 12 * dpr
+      const sq = 12
       ctx.fillStyle = sampled
-      ctx.fillRect(x + 4 * dpr, y - sq - 4 * dpr, sq, sq)
+      ctx.fillRect(x + 4, y - sq - 4, sq, sq)
       ctx.strokeStyle = 'rgba(255,255,255,0.7)'
-      ctx.lineWidth = dpr
-      ctx.strokeRect(x + 4 * dpr, y - sq - 4 * dpr, sq, sq)
-      const arm = 7 * dpr
+      ctx.lineWidth = 1
+      ctx.strokeRect(x + 4, y - sq - 4, sq, sq)
+      const arm = 7
       ctx.strokeStyle = '#fff'
-      ctx.lineWidth = 1.5 * dpr
+      ctx.lineWidth = 1.5
       ctx.beginPath()
       ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y)
       ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm)
       ctx.stroke()
     } else {
-      const s = sizeRef.current * dpr
+      const s = sizeRef.current
       if (brushShapeRef.current === 'square') {
         ctx.fillStyle = colorRef.current
         ctx.fillRect(x - s / 2, y - s / 2, s, s)
         ctx.strokeStyle = 'rgba(255,255,255,0.25)'
-        ctx.lineWidth = dpr
+        ctx.lineWidth = 1
         ctx.strokeRect(x - s / 2, y - s / 2, s, s)
       } else {
         ctx.beginPath()
@@ -309,7 +309,7 @@ export function Canvas() {
         ctx.beginPath()
         ctx.arc(x, y, r, 0, Math.PI * 2)
         ctx.strokeStyle = 'rgba(255,255,255,0.25)'
-        ctx.lineWidth = dpr
+        ctx.lineWidth = 1
         ctx.stroke()
       }
     }
@@ -320,9 +320,8 @@ export function Canvas() {
   const renderStroke = useCallback((pts: [number, number, number][], fillColor: string) => {
     const pv  = previewRef.current!
     const ctx = pv.getContext('2d')!
-    const dpr = dprRef.current
     ctx.clearRect(0, 0, pv.width, pv.height)
-    const physSize = sizeRef.current * dpr
+    const physSize = sizeRef.current
 
     if (brushShapeRef.current === 'square') {
       if (!pts.length) return
@@ -352,7 +351,6 @@ export function Canvas() {
     const pv = previewRef.current
     if (!pv) return
     const ctx = pv.getContext('2d')!
-    const dpr = dprRef.current
     ctx.clearRect(0, 0, pv.width, pv.height)
 
     if (floatingPaste.current) {
@@ -361,12 +359,12 @@ export function Canvas() {
       tmp.width = data.width; tmp.height = data.height
       tmp.getContext('2d')!.putImageData(data, 0, 0)
       ctx.drawImage(tmp, x, y)
-      drawDashedRect(ctx, x, y, data.width, data.height, dpr)
+      drawDashedRect(ctx, x, y, data.width, data.height)
       return
     }
     if (selectionRect.current) {
       const { x, y, w, h } = selectionRect.current
-      if (w > 0 && h > 0) drawDashedRect(ctx, x, y, w, h, dpr)
+      if (w > 0 && h > 0) drawDashedRect(ctx, x, y, w, h)
     }
   }, [])
 
@@ -438,7 +436,7 @@ export function Canvas() {
       }
       e.preventDefault()
       const factor  = e.deltaY < 0 ? 1.12 : 1 / 1.12
-      const newZoom = Math.min(Math.max(zoomRef.current * factor, 0.1), 20)
+      const newZoom = Math.min(Math.max(zoomRef.current * factor, 0.05), 20)
       const cx = (e.clientX - panX.current) / zoomRef.current
       const cy = (e.clientY - panY.current) / zoomRef.current
       panX.current    = e.clientX - cx * newZoom
@@ -450,16 +448,86 @@ export function Canvas() {
     return () => window.removeEventListener('wheel', onWheel)
   }, [])
 
+  // ── save / load project ───────────────────────────────────────────────────
+
+  const saveProject = useCallback(() => {
+    const { layers: ls } = useDrawStore.getState()
+    const layerData = ls.map(layer => ({
+      id:        layer.id,
+      name:      layer.name,
+      visible:   layer.visible,
+      opacity:   layer.opacity,
+      imageData: layerCanvasesRef.current.get(layer.id)?.toDataURL('image/png') ?? null,
+    }))
+    const json = JSON.stringify({ version: 1, docW: DOC_W, docH: DOC_H, layers: layerData })
+    const blob = new Blob([json], { type: 'application/json' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.download = `drawing-${Date.now()}.rale`
+    a.href     = url
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [])
+
+  const loadProject = useCallback((file: File) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const data    = JSON.parse(reader.result as string)
+        const metas: LayerMeta[] = []
+        const canvases = layerCanvasesRef.current
+        canvases.clear()
+
+        const promises = (data.layers as any[]).map((ld: any) => {
+          const meta: LayerMeta = { id: ld.id, name: ld.name, visible: ld.visible, opacity: ld.opacity }
+          metas.push(meta)
+          const cv = document.createElement('canvas')
+          cv.width = DOC_W; cv.height = DOC_H
+          canvases.set(ld.id, cv)
+          if (!ld.imageData) return Promise.resolve()
+          return new Promise<void>(resolve => {
+            const img  = new Image()
+            img.onload  = () => { cv.getContext('2d')!.drawImage(img, 0, 0); resolve() }
+            img.onerror = () => resolve()
+            img.src     = ld.imageData
+          })
+        })
+
+        Promise.all(promises).then(() => {
+          useDrawStore.getState().setLayers(metas, metas[0]?.id)
+          historyRef.current = []
+          renderComposite()
+        })
+      } catch (err) {
+        console.error('Failed to load project:', err)
+      }
+    }
+    reader.readAsText(file)
+  }, [renderComposite])
+
   // ── undo / keyboard ───────────────────────────────────────────────────────
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      // Ctrl+Shift+S — save project
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        saveProject()
+        return
+      }
+      // Ctrl+S — export PNG
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 's') {
         e.preventDefault()
         const link = document.createElement('a')
         link.download = `drawing-${Date.now()}.png`
         link.href = committedRef.current!.toDataURL('image/png')
         link.click()
+        return
+      }
+      // Ctrl+O — open project
+      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+        e.preventDefault()
+        fileInputRef.current?.click()
         return
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
@@ -485,9 +553,8 @@ export function Canvas() {
         if (!clipboard.current) return
         e.preventDefault()
         const data = clipboard.current
-        const dpr  = dprRef.current
-        const cx = (window.innerWidth  / 2 - panX.current) / zoomRef.current * dpr - data.width  / 2
-        const cy = (window.innerHeight / 2 - panY.current) / zoomRef.current * dpr - data.height / 2
+        const cx = (window.innerWidth  / 2 - panX.current) / zoomRef.current - data.width  / 2
+        const cy = (window.innerHeight / 2 - panY.current) / zoomRef.current - data.height / 2
         if (floatingPaste.current) { saveSnapshot(); commitFloatingPaste() }
         floatingPaste.current = { data, x: Math.round(cx), y: Math.round(cy) }
         useDrawStore.getState().setTool('select')
@@ -511,7 +578,7 @@ export function Canvas() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [renderComposite, saveSnapshot, commitFloatingPaste, drawSelectionOverlay])
+  }, [renderComposite, saveSnapshot, commitFloatingPaste, drawSelectionOverlay, saveProject])
 
   // ── event setup ───────────────────────────────────────────────────────────
 
@@ -520,41 +587,28 @@ export function Canvas() {
     const committed = committedRef.current!
     const preview   = previewRef.current!
 
-    const resize = () => {
-      const dpr = dprRef.current
-      // resize each layer canvas preserving content
-      for (const [, cv] of layerCanvasesRef.current) {
-        const tmp = document.createElement('canvas')
-        tmp.width = cv.width; tmp.height = cv.height
-        tmp.getContext('2d')!.drawImage(cv, 0, 0)
-        cv.width  = window.innerWidth  * dpr
-        cv.height = window.innerHeight * dpr
-        cv.getContext('2d')!.drawImage(tmp, 0, 0)
-      }
-      for (const cv of [preview, cursor]) {
-        cv.width  = window.innerWidth  * dpr
-        cv.height = window.innerHeight * dpr
-      }
-      committed.width  = window.innerWidth  * dpr
-      committed.height = window.innerHeight * dpr
-      renderComposite()
-    }
-    resize()
-    window.addEventListener('resize', resize)
+    // initialize fixed-size canvases
+    committed.width = preview.width = cursor.width  = DOC_W
+    committed.height = preview.height = cursor.height = DOC_H
 
-    const getPos = (e: PointerEvent): [number, number, number] => {
-      const dpr = dprRef.current
-      return [
-        (e.clientX - panX.current) / zoomRef.current * dpr,
-        (e.clientY - panY.current) / zoomRef.current * dpr,
-        e.pressure || 0.5,
-      ]
-    }
+    // initial zoom/pan: fit document centered in viewport
+    const initZoom  = Math.min(window.innerWidth / DOC_W, window.innerHeight / DOC_H) * 0.95
+    zoomRef.current = initZoom
+    panX.current    = (window.innerWidth  - DOC_W * initZoom) / 2
+    panY.current    = (window.innerHeight - DOC_H * initZoom) / 2
 
     const applyTransform = () => {
       wrapperRef.current!.style.transform =
         `translate(${panX.current}px, ${panY.current}px) scale(${zoomRef.current})`
     }
+    applyTransform()
+    renderComposite()
+
+    const getPos = (e: PointerEvent): [number, number, number] => [
+      (e.clientX - panX.current) / zoomRef.current,
+      (e.clientY - panY.current) / zoomRef.current,
+      e.pressure || 0.5,
+    ]
 
     const onDown = (e: PointerEvent) => {
       if (e.button === 1) {
@@ -639,7 +693,7 @@ export function Canvas() {
           ctx.save()
           if (toolRef.current === 'eraser') ctx.globalCompositeOperation = 'destination-out'
           ctx.strokeStyle = toolRef.current === 'eraser' ? 'rgba(0,0,0,1)' : colorRef.current
-          ctx.lineWidth   = sizeRef.current * dprRef.current
+          ctx.lineWidth   = sizeRef.current
           ctx.lineCap     = brushShapeRef.current === 'square' ? 'square' : 'round'
           ctx.beginPath()
           ctx.moveTo(lineStart.current[0], lineStart.current[1])
@@ -701,7 +755,7 @@ export function Canvas() {
         ctx.clearRect(0, 0, preview.width, preview.height)
         ctx.save()
         ctx.strokeStyle = colorRef.current
-        ctx.lineWidth   = sizeRef.current * dprRef.current
+        ctx.lineWidth   = sizeRef.current
         ctx.lineCap     = 'round'
         ctx.setLineDash([6, 5])
         ctx.beginPath()
@@ -740,7 +794,6 @@ export function Canvas() {
     overlay.addEventListener('pointerleave', onLeave)
 
     return () => {
-      window.removeEventListener('resize', resize)
       overlay.removeEventListener('pointerdown',  onDown)
       overlay.removeEventListener('pointermove',  onMove)
       overlay.removeEventListener('pointerup',    onUp)
@@ -753,12 +806,31 @@ export function Canvas() {
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
-      <div ref={wrapperRef} style={{ position: 'absolute', inset: 0, transformOrigin: '0 0' }}>
+      <div
+        ref={wrapperRef}
+        style={{
+          position: 'absolute', top: 0, left: 0,
+          width: DOC_W, height: DOC_H,
+          transformOrigin: '0 0',
+          boxShadow: '0 0 0 1px #333, 0 8px 32px rgba(0,0,0,0.6)',
+        }}
+      >
         <canvas ref={committedRef} style={shared} />
         <canvas ref={previewRef}   style={shared} />
         <canvas ref={cursorRef}    style={shared} />
       </div>
       <div ref={overlayRef} style={{ position: 'absolute', inset: 0, cursor: 'none', zIndex: 5 }} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".rale"
+        style={{ display: 'none' }}
+        onChange={e => {
+          const f = e.target.files?.[0]
+          if (f) loadProject(f)
+          e.target.value = ''
+        }}
+      />
     </div>
   )
 }
