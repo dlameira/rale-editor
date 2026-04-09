@@ -138,6 +138,10 @@ export function Canvas() {
 
   const layerCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map())
 
+  // dirty-rect tracking — only clear/draw what changed
+  const strokeBoundsRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
+  const cursorBoundsRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
+
   // viewport transform — panX/Y = screen position of world (0,0)
   const zoomRef = useRef(1)
   const panX    = useRef(0)
@@ -184,6 +188,23 @@ export function Canvas() {
       ctx.drawImage(cv, 0, 0)
     }
     ctx.globalAlpha = 1
+  }, [])
+
+  // composite only the dirty rectangle — much faster than full composite during strokes
+  const renderCompositeRect = useCallback((x: number, y: number, w: number, h: number) => {
+    const committed = committedRef.current; if (!committed) return
+    const ctx = committed.getContext('2d')!
+    const { layers: ls } = useDrawStore.getState()
+    ctx.save()
+    ctx.clearRect(x, y, w, h)
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip()
+    for (let i = ls.length - 1; i >= 0; i--) {
+      const layer = ls[i]; if (!layer.visible) continue
+      const cv = layerCanvasesRef.current.get(layer.id); if (!cv) continue
+      ctx.globalAlpha = layer.opacity / 100
+      ctx.drawImage(cv, 0, 0)
+    }
+    ctx.globalAlpha = 1; ctx.restore()
   }, [])
 
   const getActiveLayerCanvas = useCallback((): HTMLCanvasElement => {
@@ -270,8 +291,14 @@ export function Canvas() {
   const drawCursor = useCallback((x: number, y: number) => {
     const cv  = cursorRef.current!
     const ctx = cv.getContext('2d')!
-    ctx.clearRect(0, 0, cv.width, cv.height)
+    // only clear previous cursor area
+    const prev = cursorBoundsRef.current
+    if (prev) ctx.clearRect(prev.x, prev.y, prev.w, prev.h)
     const r = Math.max(sizeRef.current / 2, 1)
+    // compute bounds for current tool so next frame knows what to erase
+    const pad = 4
+    let cb = { x: x-r-pad, y: y-r-pad-20, w: r*2+pad*2+20, h: r*2+pad*2+40 }
+    cursorBoundsRef.current = cb
     if (toolRef.current === 'eraser') {
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2)
       ctx.strokeStyle='rgba(255,255,255,0.7)'; ctx.lineWidth=1.5; ctx.stroke()
@@ -319,8 +346,18 @@ export function Canvas() {
   const renderStroke = useCallback((pts: [number,number,number][], fillColor: string) => {
     const pv  = previewRef.current!
     const ctx = pv.getContext('2d')!
-    ctx.clearRect(0, 0, pv.width, pv.height)
     const physSize = sizeRef.current
+    // ── bounding-box clear: only erase the area the stroke actually occupies ──
+    if (!pts.length) { ctx.clearRect(0, 0, pv.width, pv.height); strokeBoundsRef.current = null; return }
+    const pad = physSize + 4
+    let minX=pts[0][0], minY=pts[0][1], maxX=pts[0][0], maxY=pts[0][1]
+    for (const [px,py] of pts) {
+      if (px<minX)minX=px; if (px>maxX)maxX=px
+      if (py<minY)minY=py; if (py>maxY)maxY=py
+    }
+    const nb = { x: minX-pad, y: minY-pad, w: maxX-minX+pad*2, h: maxY-minY+pad*2 }
+    ctx.clearRect(nb.x, nb.y, nb.w, nb.h)
+    strokeBoundsRef.current = nb
     if (brushShapeRef.current === 'square') {
       if (!pts.length) return
       ctx.save(); ctx.fillStyle=ctx.strokeStyle=fillColor; ctx.lineWidth=physSize
@@ -386,15 +423,17 @@ export function Canvas() {
     ctx.drawImage(preview, 0, 0)
     ctx.globalCompositeOperation = 'source-over'
     preview.getContext('2d')!.clearRect(0, 0, preview.width, preview.height)
+    strokeBoundsRef.current = null
   }, [getActiveLayerCanvas])
 
-  const flushSegment = useCallback(() => {
+  const flushSegment = useCallback((dirtyRect?: { x: number; y: number; w: number; h: number }) => {
     if (!isDrawing.current || !points.current.length) return
     const last = points.current[points.current.length - 1]
-    flushPreviewToLayer()
+    flushPreviewToLayer()  // also resets strokeBoundsRef
     points.current = [last]
-    renderComposite()
-  }, [flushPreviewToLayer, renderComposite])
+    if (dirtyRect) renderCompositeRect(dirtyRect.x, dirtyRect.y, dirtyRect.w, dirtyRect.h)
+    else renderComposite()
+  }, [flushPreviewToLayer, renderComposite, renderCompositeRect])
 
   const commitStroke = useCallback(() => {
     flushPreviewToLayer()
@@ -673,8 +712,14 @@ export function Canvas() {
 
       if (!isDrawing.current) return
       ensureBuffer(x, y)
-      points.current = [...points.current, [x,y,pressure]]
-      renderStroke(points.current, toolRef.current==='eraser'?'rgba(0,0,0,1)':colorRef.current)
+      points.current.push([x, y, pressure])
+      // periodic mini-flush: keeps getStroke fast and prevents unbounded point growth
+      if (points.current.length > 60) {
+        flushSegment(strokeBoundsRef.current ?? undefined)
+        renderStroke(points.current, toolRef.current==='eraser'?'rgba(0,0,0,1)':colorRef.current)
+      } else {
+        renderStroke(points.current, toolRef.current==='eraser'?'rgba(0,0,0,1)':colorRef.current)
+      }
     }
 
     const onUp = (e: PointerEvent) => {
@@ -684,7 +729,11 @@ export function Canvas() {
     }
 
     const onLeave = () => {
-      cursor.getContext('2d')!.clearRect(0,0,cursor.width,cursor.height)
+      if (cursorBoundsRef.current) {
+        const {x,y,w,h} = cursorBoundsRef.current
+        cursor.getContext('2d')!.clearRect(x, y, w, h)
+        cursorBoundsRef.current = null
+      }
       if (isDrawing.current) commitStroke()
     }
 
