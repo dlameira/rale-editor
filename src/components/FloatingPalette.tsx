@@ -192,7 +192,6 @@ export function FloatingPalette() {
       >
         {/* cor ativa — clicar abre o color picker */}
         <div
-          onClick={() => pickerRef.current?.click()}
           title="Clique para escolher nova cor"
           style={{
             width: 32, height: 32,
@@ -201,8 +200,22 @@ export function FloatingPalette() {
             border: tool === 'eraser' ? '2px dashed #444' : '2px solid #fff',
             flexShrink: 0,
             cursor: 'pointer',
+            position: 'relative',
+            overflow: 'hidden',
           }}
-        />
+        >
+          <input
+            ref={pickerRef}
+            type="color"
+            value={color}
+            onChange={e => pickActive(e.target.value)}
+            style={{
+              position: 'absolute', inset: 0,
+              width: '100%', height: '100%',
+              opacity: 0, cursor: 'pointer', border: 'none', padding: 0,
+            }}
+          />
+        </div>
 
         <div style={{ width: '100%', height: 1, background: '#222' }} />
 
@@ -236,13 +249,6 @@ export function FloatingPalette() {
           ))}
         </div>
 
-        <input
-          ref={pickerRef}
-          type="color"
-          value={color}
-          onChange={e => pickActive(e.target.value)}
-          style={{ display: 'none' }}
-        />
       </div>
 
       {/* painel de variações */}
