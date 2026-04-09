@@ -181,7 +181,6 @@ export function Canvas() {
   const brushShapeRef = useRef(brushShape)
   useEffect(() => { toolRef.current = tool }, [tool])
   useEffect(() => { colorRef.current = color }, [color])
-  useEffect(() => { sizeRef.current = size }, [size])
   useEffect(() => { brushShapeRef.current = brushShape }, [brushShape])
 
   // ── layer canvas management ───────────────────────────────────────────────
@@ -391,23 +390,39 @@ export function Canvas() {
     if (historyRef.current.length > 20) historyRef.current.shift()
   }, [])
 
-  const commitStroke = useCallback(() => {
+  // blit preview onto active layer canvas (shared by flush and commit)
+  const flushPreviewToLayer = useCallback(() => {
     const activeCanvas = getActiveLayerCanvas()
     const preview      = previewRef.current!
     const ctx          = activeCanvas.getContext('2d')!
-    saveSnapshot()
-    if (toolRef.current === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out'
-    } else {
-      useDrawStore.getState().addUsedColor(colorRef.current)
-    }
+    if (toolRef.current === 'eraser') ctx.globalCompositeOperation = 'destination-out'
     ctx.drawImage(preview, 0, 0)
     ctx.globalCompositeOperation = 'source-over'
     preview.getContext('2d')!.clearRect(0, 0, preview.width, preview.height)
+  }, [getActiveLayerCanvas])
+
+  // commit current preview segment to layer, keep last point → new segment begins
+  const flushSegment = useCallback(() => {
+    if (!isDrawing.current || !points.current.length) return
+    const last = points.current[points.current.length - 1]
+    flushPreviewToLayer()
+    points.current = [last]
+    renderComposite()
+  }, [flushPreviewToLayer, renderComposite])
+
+  const commitStroke = useCallback(() => {
+    flushPreviewToLayer()
+    if (toolRef.current !== 'eraser') useDrawStore.getState().addUsedColor(colorRef.current)
     points.current    = []
     isDrawing.current = false
     renderComposite()
-  }, [saveSnapshot, getActiveLayerCanvas, renderComposite])
+  }, [flushPreviewToLayer, renderComposite])
+
+  // when brush size changes mid-stroke → flush current segment, new size takes over
+  useEffect(() => {
+    flushSegment()
+    sizeRef.current = size
+  }, [size, flushSegment])
 
   // cleanup on tool switch
   useEffect(() => {
@@ -714,6 +729,7 @@ export function Canvas() {
       }
 
       // ── brush / eraser ──
+      saveSnapshot()   // snapshot before stroke starts so undo covers whole stroke
       overlayRef.current!.setPointerCapture(e.pointerId)
       isDrawing.current = true
       points.current    = [[x, y, pressure]]

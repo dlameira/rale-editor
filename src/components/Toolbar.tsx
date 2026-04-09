@@ -1,7 +1,24 @@
 import { useDrawStore } from '../store/useDrawStore'
 
 export function Toolbar() {
-  const { tool, size, brushShape, setTool, setSize, setBrushShape } = useDrawStore()
+  const { tool, size, brushShape, setTool, setSize, setBrushShape, showToolbar, setShowToolbar } = useDrawStore()
+
+  if (!showToolbar) {
+    return (
+      <button
+        onClick={() => setShowToolbar(true)}
+        title="Mostrar toolbar (`)"
+        style={{
+          position: 'fixed', left: 0, top: '50%', transform: 'translateY(-50%)',
+          width: 14, height: 48, background: '#1a1a1a', border: '1px solid #333',
+          borderLeft: 'none', borderRadius: '0 6px 6px 0',
+          color: '#555', cursor: 'pointer', fontSize: 10, padding: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 10,
+        }}
+      >›</button>
+    )
+  }
 
   return (
     <div style={{
@@ -19,6 +36,14 @@ export function Toolbar() {
       zIndex: 10,
       alignItems: 'center',
     }}>
+      <button
+        onClick={() => setShowToolbar(false)}
+        title="Ocultar toolbar (`)"
+        style={{
+          background: 'none', border: 'none', color: '#333', cursor: 'pointer',
+          fontSize: 16, padding: 0, lineHeight: 1, alignSelf: 'flex-end', marginBottom: -4,
+        }}
+      >‹</button>
       <ToolBtn label="B" active={tool === 'brush'}  onClick={() => setTool('brush')}  title="Brush (B)" />
       <ToolBtn label="E" active={tool === 'eraser'} onClick={() => setTool('eraser')} title="Eraser (E)" />
       <ToolBtn label="F" active={tool === 'fill'}   onClick={() => setTool('fill')}   title="Fill (G)" />

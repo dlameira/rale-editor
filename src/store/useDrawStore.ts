@@ -25,6 +25,7 @@ interface DrawStore {
   layers:        LayerMeta[]
   activeLayerId: string
   showLayers:    boolean
+  showToolbar:   boolean
 
   setTool:             (tool: Tool) => void
   setColor:            (color: string) => void
@@ -39,6 +40,7 @@ interface DrawStore {
   moveLayerDown:       (id: string) => void
   reorderLayers:       (fromId: string, toIndex: number) => void
   setShowLayers:       (v: boolean) => void
+  setShowToolbar:      (v: boolean) => void
   setLayers:           (layers: LayerMeta[], activeId?: string) => void
   setLayerOpacity:     (id: string, opacity: number) => void
 }
@@ -54,6 +56,7 @@ export const useDrawStore = create<DrawStore>((set, get) => ({
   layers:        [first],
   activeLayerId: first.id,
   showLayers:    false,
+  showToolbar:   true,
 
   setTool:       (tool)  => set({ tool }),
   setColor:      (color) => set({ color }),
@@ -116,7 +119,8 @@ export const useDrawStore = create<DrawStore>((set, get) => ({
     set({ layers: next })
   },
 
-  setShowLayers: (showLayers) => set({ showLayers }),
+  setShowLayers:  (showLayers)  => set({ showLayers }),
+  setShowToolbar: (showToolbar) => set({ showToolbar }),
 
   setLayers: (layers, activeId) => set({
     layers,

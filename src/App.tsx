@@ -6,10 +6,12 @@ import { LayersPanel } from './components/LayersPanel'
 import { useDrawStore } from './store/useDrawStore'
 
 export default function App() {
-  const setTool       = useDrawStore(s => s.setTool)
-  const setBrushShape = useDrawStore(s => s.setBrushShape)
-  const setShowLayers = useDrawStore(s => s.setShowLayers)
-  const showLayers    = useDrawStore(s => s.showLayers)
+  const setTool        = useDrawStore(s => s.setTool)
+  const setBrushShape  = useDrawStore(s => s.setBrushShape)
+  const setShowLayers  = useDrawStore(s => s.setShowLayers)
+  const showLayers     = useDrawStore(s => s.showLayers)
+  const setShowToolbar = useDrawStore(s => s.setShowToolbar)
+  const showToolbar    = useDrawStore(s => s.showToolbar)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -31,11 +33,14 @@ export default function App() {
           e.preventDefault()
           setShowLayers(!showLayers)
           break
+        case '`':
+          setShowToolbar(!showToolbar)
+          break
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [setTool, setBrushShape, setShowLayers, showLayers])
+  }, [setTool, setBrushShape, setShowLayers, showLayers, setShowToolbar, showToolbar])
 
   return (
     <div style={{ width: '100vw', height: '100vh', background: '#000', overflow: 'hidden', position: 'relative' }}>
