@@ -14,6 +14,7 @@ export function LayersPanel() {
   if (!showLayers) return null
 
   const onHeaderDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return  // não capturar se clicou num botão filho
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = { ox: e.clientX, oy: e.clientY, px: pos.x, py: pos.y }
   }
