@@ -78,7 +78,9 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
     if (row < height - 1) stack.push(idx + width)
   }
 
-  const expand = (tolerance: number) => {
+  // expansão adaptativa: estima a cor do traço a partir dos vizinhos não-preenchidos
+  // e preenche pixels de borda que são majoritariamente a cor do target (α > 50%)
+  const expandSmart = () => {
     for (let idx = 0; idx < width * height; idx++) {
       if (!visited[idx]) continue
       const col = idx % width, row = Math.floor(idx / width)
@@ -92,18 +94,48 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
         if (nidx < 0 || visited[nidx]) continue
         const ni4 = nidx * 4
         const na  = data[ni4 + 3]
-        const isSemiTransparent = na > 0 && na < 230
-        const isBlendedOpaque   = na >= 230 &&
-          Math.abs(data[ni4] - target[0]) + Math.abs(data[ni4+1] - target[1]) + Math.abs(data[ni4+2] - target[2]) <= tolerance
-        if (isSemiTransparent || isBlendedOpaque) {
+
+        // pixel semi-transparente: preencher direto (fundo transparente do canvas)
+        if (na > 0 && na < 230) {
+          data[ni4] = fill[0]; data[ni4+1] = fill[1]; data[ni4+2] = fill[2]; data[ni4+3] = 255
+          visited[nidx] = 1
+          continue
+        }
+        if (na < 128) continue
+
+        // pixel opaco de borda: estimar cor do traço pelos vizinhos não-preenchidos
+        const cCol = nidx % width, cRow = Math.floor(nidx / width)
+        const cn = [
+          cCol > 0          ? nidx - 1      : -1,
+          cCol < width - 1  ? nidx + 1      : -1,
+          cRow > 0          ? nidx - width  : -1,
+          cRow < height - 1 ? nidx + width  : -1,
+        ]
+        let sR = 0, sG = 0, sB = 0, sN = 0
+        for (const nnidx of cn) {
+          if (nnidx < 0 || visited[nnidx]) continue
+          const nn4 = nnidx * 4
+          if (data[nn4 + 3] < 128) continue
+          // vizinho claramente diferente do target = cor do traço
+          const d = Math.abs(data[nn4] - target[0]) + Math.abs(data[nn4+1] - target[1]) + Math.abs(data[nn4+2] - target[2])
+          if (d > 60) { sR += data[nn4]; sG += data[nn4+1]; sB += data[nn4+2]; sN++ }
+        }
+
+        const dToTarget = Math.abs(data[ni4] - target[0]) + Math.abs(data[ni4+1] - target[1]) + Math.abs(data[ni4+2] - target[2])
+
+        const shouldFill = sN > 0
+          ? dToTarget <= (Math.abs(data[ni4] - sR/sN) + Math.abs(data[ni4+1] - sG/sN) + Math.abs(data[ni4+2] - sB/sN))
+          : dToTarget <= 200  // sem vizinhos-traço detectados: tolerância generosa
+
+        if (shouldFill) {
           data[ni4] = fill[0]; data[ni4+1] = fill[1]; data[ni4+2] = fill[2]; data[ni4+3] = 255
           visited[nidx] = 1
         }
       }
     }
   }
-  expand(128)
-  expand(128)
+  expandSmart()
+  expandSmart()  // 2º passo captura pixels que ficaram acessíveis após o 1º
   ctx.putImageData(img, 0, 0)
 }
 
