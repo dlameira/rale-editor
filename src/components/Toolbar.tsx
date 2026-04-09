@@ -23,7 +23,8 @@ export function Toolbar() {
       <ToolBtn label="E" active={tool === 'eraser'} onClick={() => setTool('eraser')} title="Eraser (E)" />
       <ToolBtn label="F" active={tool === 'fill'}   onClick={() => setTool('fill')}   title="Fill (G)" />
       <ToolBtn label="L" active={tool === 'line'}   onClick={() => setTool('line')}   title="Linha reta (L)" />
-      <ToolBtn label="S" active={tool === 'select'} onClick={() => setTool('select')} title="Seleção (S)" />
+      <ToolBtn label="S" active={tool === 'select'}      onClick={() => setTool('select')}      title="Seleção (S)" />
+      <ToolBtn label="I" active={tool === 'eyedropper'} onClick={() => setTool('eyedropper')} title="Eyedropper (I)" />
 
       <Divider />
 

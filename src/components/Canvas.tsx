@@ -42,17 +42,16 @@ function parseColor(color: string): [number, number, number, number] {
 function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor: string) {
   const ctx = canvas.getContext('2d')!
   const { width, height } = canvas
-  const img = ctx.getImageData(0, 0, width, height)
+  const img  = ctx.getImageData(0, 0, width, height)
   const data = img.data
 
   const x0 = Math.round(sx)
   const y0 = Math.round(sy)
   if (x0 < 0 || y0 < 0 || x0 >= width || y0 >= height) return
 
-  const base = (y0 * width + x0) * 4
+  const base   = (y0 * width + x0) * 4
   const target = [data[base], data[base + 1], data[base + 2], data[base + 3]]
-  const fill = parseColor(fillColor)
-
+  const fill   = parseColor(fillColor)
   if (target.every((v, i) => v === fill[i])) return
 
   const TOLERANCE = 40
@@ -63,32 +62,26 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
     Math.abs(data[i + 3] - target[3]) <= TOLERANCE
 
   const visited = new Uint8Array(width * height)
-  const stack = [y0 * width + x0]
+  const stack   = [y0 * width + x0]
 
   while (stack.length) {
     const idx = stack.pop()!
     if (visited[idx]) continue
     if (!match(idx * 4)) continue
     visited[idx] = 1
-
     const i4 = idx * 4
-    data[i4] = fill[0]; data[i4 + 1] = fill[1]
-    data[i4 + 2] = fill[2]; data[i4 + 3] = fill[3]
-
-    const col = idx % width
-    const row = Math.floor(idx / width)
+    data[i4] = fill[0]; data[i4 + 1] = fill[1]; data[i4 + 2] = fill[2]; data[i4 + 3] = fill[3]
+    const col = idx % width, row = Math.floor(idx / width)
     if (col > 0)          stack.push(idx - 1)
     if (col < width - 1)  stack.push(idx + 1)
     if (row > 0)          stack.push(idx - width)
     if (row < height - 1) stack.push(idx + width)
   }
 
-  // passo de expansão: 2 passes para cobrir gradientes mais amplos de anti-aliasing
   const expand = (tolerance: number) => {
     for (let idx = 0; idx < width * height; idx++) {
       if (!visited[idx]) continue
-      const col = idx % width
-      const row = Math.floor(idx / width)
+      const col = idx % width, row = Math.floor(idx / width)
       const neighbors = [
         col > 0          ? idx - 1      : -1,
         col < width - 1  ? idx + 1      : -1,
@@ -101,26 +94,22 @@ function floodFill(canvas: HTMLCanvasElement, sx: number, sy: number, fillColor:
         const na  = data[ni4 + 3]
         const isSemiTransparent = na > 0 && na < 230
         const isBlendedOpaque   = na >= 230 &&
-          Math.abs(data[ni4]     - target[0]) +
-          Math.abs(data[ni4 + 1] - target[1]) +
-          Math.abs(data[ni4 + 2] - target[2]) <= tolerance
+          Math.abs(data[ni4] - target[0]) + Math.abs(data[ni4+1] - target[1]) + Math.abs(data[ni4+2] - target[2]) <= tolerance
         if (isSemiTransparent || isBlendedOpaque) {
-          data[ni4]     = fill[0]
-          data[ni4 + 1] = fill[1]
-          data[ni4 + 2] = fill[2]
-          data[ni4 + 3] = 255
+          data[ni4] = fill[0]; data[ni4+1] = fill[1]; data[ni4+2] = fill[2]; data[ni4+3] = 255
           visited[nidx] = 1
         }
       }
     }
   }
-  expand(128) // 1º passo: pega transições até ~50% blend
-  expand(128) // 2º passo: pega pixels que ficaram adjacentes após o 1º
-
+  expand(128)
+  expand(128)
   ctx.putImageData(img, 0, 0)
 }
 
 // ─── component ──────────────────────────────────────────────────────────────
+
+type LayerSnap = { layerId: string; data: ImageData }
 
 export function Canvas() {
   const committedRef = useRef<HTMLCanvasElement>(null)
@@ -132,7 +121,7 @@ export function Canvas() {
   const isDrawing  = useRef(false)
   const points     = useRef<[number, number, number][]>([])
   const lineStart  = useRef<[number, number] | null>(null)
-  const historyRef = useRef<ImageData[]>([])
+  const historyRef = useRef<LayerSnap[][]>([])
   const isPanning  = useRef(false)
   const panStart   = useRef({ mx: 0, my: 0, px: 0, py: 0 })
 
@@ -143,20 +132,66 @@ export function Canvas() {
   const floatingPaste   = useRef<{ data: ImageData; x: number; y: number } | null>(null)
   const floatingDragOff = useRef<{ dx: number; dy: number } | null>(null)
 
+  // layers — each layer has its own offscreen canvas
+  const layerCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map())
+
   const zoomRef = useRef(1)
   const panX    = useRef(0)
   const panY    = useRef(0)
   const dprRef  = useRef(Math.max(1, window.devicePixelRatio || 1))
 
-  const { tool, color, size, brushShape } = useDrawStore()
-  const toolRef        = useRef(tool)
-  const colorRef       = useRef(color)
-  const sizeRef        = useRef(size)
-  const brushShapeRef  = useRef(brushShape)
+  const { tool, color, size, brushShape, layers } = useDrawStore()
+  const toolRef       = useRef(tool)
+  const colorRef      = useRef(color)
+  const sizeRef       = useRef(size)
+  const brushShapeRef = useRef(brushShape)
   useEffect(() => { toolRef.current = tool }, [tool])
   useEffect(() => { colorRef.current = color }, [color])
   useEffect(() => { sizeRef.current = size }, [size])
   useEffect(() => { brushShapeRef.current = brushShape }, [brushShape])
+
+  // ── layer canvas management ───────────────────────────────────────────────
+
+  const renderComposite = useCallback(() => {
+    const committed = committedRef.current
+    if (!committed) return
+    const ctx = committed.getContext('2d')!
+    const { layers: ls } = useDrawStore.getState()
+    ctx.clearRect(0, 0, committed.width, committed.height)
+    for (let i = ls.length - 1; i >= 0; i--) {
+      const layer = ls[i]
+      if (!layer.visible) continue
+      const cv = layerCanvasesRef.current.get(layer.id)
+      if (!cv) continue
+      ctx.globalAlpha = layer.opacity / 100
+      ctx.drawImage(cv, 0, 0)
+    }
+    ctx.globalAlpha = 1
+  }, [])
+
+  const getActiveLayerCanvas = useCallback((): HTMLCanvasElement => {
+    const { activeLayerId } = useDrawStore.getState()
+    return layerCanvasesRef.current.get(activeLayerId) ?? committedRef.current!
+  }, [])
+
+  // sync layer canvases when layers array changes
+  useEffect(() => {
+    const canvases = layerCanvasesRef.current
+    const dpr = dprRef.current
+    for (const layer of layers) {
+      if (!canvases.has(layer.id)) {
+        const cv = document.createElement('canvas')
+        cv.width  = window.innerWidth  * dpr
+        cv.height = window.innerHeight * dpr
+        canvases.set(layer.id, cv)
+      }
+    }
+    const ids = new Set(layers.map(l => l.id))
+    for (const id of [...canvases.keys()]) {
+      if (!ids.has(id)) canvases.delete(id)
+    }
+    renderComposite()
+  }, [layers, renderComposite])
 
   // ── cursor ────────────────────────────────────────────────────────────────
 
@@ -203,6 +238,29 @@ export function Canvas() {
       ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y)
       ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm)
       ctx.stroke()
+    } else if (toolRef.current === 'eyedropper') {
+      const committed = committedRef.current
+      let sampled = colorRef.current
+      if (committed) {
+        const px = Math.round(x), py = Math.round(y)
+        if (px >= 0 && py >= 0 && px < committed.width && py < committed.height) {
+          const d = committed.getContext('2d')!.getImageData(px, py, 1, 1).data
+          sampled = `rgb(${d[0]},${d[1]},${d[2]})`
+        }
+      }
+      const sq = 12 * dpr
+      ctx.fillStyle = sampled
+      ctx.fillRect(x + 4 * dpr, y - sq - 4 * dpr, sq, sq)
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)'
+      ctx.lineWidth = dpr
+      ctx.strokeRect(x + 4 * dpr, y - sq - 4 * dpr, sq, sq)
+      const arm = 7 * dpr
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 1.5 * dpr
+      ctx.beginPath()
+      ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y)
+      ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm)
+      ctx.stroke()
     } else {
       const s = sizeRef.current * dpr
       if (brushShapeRef.current === 'square') {
@@ -232,17 +290,14 @@ export function Canvas() {
     const ctx = pv.getContext('2d')!
     const dpr = dprRef.current
     ctx.clearRect(0, 0, pv.width, pv.height)
-
     const physSize = sizeRef.current * dpr
 
     if (brushShapeRef.current === 'square') {
       if (!pts.length) return
       ctx.save()
-      ctx.fillStyle   = fillColor
-      ctx.strokeStyle = fillColor
-      ctx.lineWidth   = physSize
-      ctx.lineCap     = 'square'
-      ctx.lineJoin    = 'miter'
+      ctx.fillStyle = ctx.strokeStyle = fillColor
+      ctx.lineWidth = physSize
+      ctx.lineCap = 'square'; ctx.lineJoin = 'miter'
       if (pts.length === 1) {
         ctx.fillRect(pts[0][0] - physSize / 2, pts[0][1] - physSize / 2, physSize, physSize)
       } else {
@@ -258,6 +313,8 @@ export function Canvas() {
       ctx.fill(getPathFromStroke(stroke))
     }
   }, [])
+
+  // ── selection overlay ─────────────────────────────────────────────────────
 
   const drawSelectionOverlay = useCallback(() => {
     const pv = previewRef.current
@@ -283,28 +340,31 @@ export function Canvas() {
 
   const commitFloatingPaste = useCallback(() => {
     if (!floatingPaste.current) return
-    const committed = committedRef.current!
     const { data, x, y } = floatingPaste.current
     const tmp = document.createElement('canvas')
     tmp.width = data.width; tmp.height = data.height
     tmp.getContext('2d')!.putImageData(data, 0, 0)
-    committed.getContext('2d')!.drawImage(tmp, x, y)
+    getActiveLayerCanvas().getContext('2d')!.drawImage(tmp, x, y)
     floatingPaste.current = null
-    const pv = previewRef.current!
-    pv.getContext('2d')!.clearRect(0, 0, pv.width, pv.height)
-  }, [])
+    previewRef.current!.getContext('2d')!.clearRect(0, 0, previewRef.current!.width, previewRef.current!.height)
+    renderComposite()
+  }, [getActiveLayerCanvas, renderComposite])
 
   const saveSnapshot = useCallback(() => {
-    const cv   = committedRef.current!
-    const snap = cv.getContext('2d')!.getImageData(0, 0, cv.width, cv.height)
+    const { layers: ls } = useDrawStore.getState()
+    const snap: LayerSnap[] = ls.flatMap(layer => {
+      const cv = layerCanvasesRef.current.get(layer.id)
+      if (!cv) return []
+      return [{ layerId: layer.id, data: cv.getContext('2d')!.getImageData(0, 0, cv.width, cv.height) }]
+    })
     historyRef.current.push(snap)
-    if (historyRef.current.length > 30) historyRef.current.shift()
+    if (historyRef.current.length > 20) historyRef.current.shift()
   }, [])
 
   const commitStroke = useCallback(() => {
-    const committed = committedRef.current!
-    const preview   = previewRef.current!
-    const ctx = committed.getContext('2d')!
+    const activeCanvas = getActiveLayerCanvas()
+    const preview      = previewRef.current!
+    const ctx          = activeCanvas.getContext('2d')!
     saveSnapshot()
     if (toolRef.current === 'eraser') {
       ctx.globalCompositeOperation = 'destination-out'
@@ -314,9 +374,10 @@ export function Canvas() {
     ctx.drawImage(preview, 0, 0)
     ctx.globalCompositeOperation = 'source-over'
     preview.getContext('2d')!.clearRect(0, 0, preview.width, preview.height)
-    points.current = []
+    points.current    = []
     isDrawing.current = false
-  }, [saveSnapshot])
+    renderComposite()
+  }, [saveSnapshot, getActiveLayerCanvas, renderComposite])
 
   // cleanup on tool switch
   useEffect(() => {
@@ -329,53 +390,43 @@ export function Canvas() {
     if (p) p.getContext('2d')!.clearRect(0, 0, p.width, p.height)
   }, [tool, commitFloatingPaste, saveSnapshot])
 
-  // ── zoom ─────────────────────────────────────────────────────────────────
+  // ── zoom ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const applyTransform = () => {
-      const el = wrapperRef.current!
-      el.style.transform = `translate(${panX.current}px, ${panY.current}px) scale(${zoomRef.current})`
+      wrapperRef.current!.style.transform =
+        `translate(${panX.current}px, ${panY.current}px) scale(${zoomRef.current})`
     }
-
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) {
-        // sem ctrl → muda tamanho do brush
         e.preventDefault()
         const { size, setSize } = useDrawStore.getState()
-        const delta   = e.deltaY < 0 ? 1 : -1
-        const newSize = Math.min(Math.max(size + delta, 1), 60)
-        setSize(newSize)
+        setSize(Math.min(Math.max(size + (e.deltaY < 0 ? 1 : -1), 1), 60))
         return
       }
       e.preventDefault()
-
       const factor  = e.deltaY < 0 ? 1.12 : 1 / 1.12
       const newZoom = Math.min(Math.max(zoomRef.current * factor, 0.1), 20)
-
-      // manter o pixel do canvas sob o cursor fixo na tela
       const cx = (e.clientX - panX.current) / zoomRef.current
       const cy = (e.clientY - panY.current) / zoomRef.current
-      panX.current = e.clientX - cx * newZoom
-      panY.current = e.clientY - cy * newZoom
+      panX.current    = e.clientX - cx * newZoom
+      panY.current    = e.clientY - cy * newZoom
       zoomRef.current = newZoom
-
       applyTransform()
     }
-
     window.addEventListener('wheel', onWheel, { passive: false })
     return () => window.removeEventListener('wheel', onWheel)
   }, [])
 
-  // ── undo ─────────────────────────────────────────────────────────────────
+  // ── undo / keyboard ───────────────────────────────────────────────────────
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault()
-        const cv = committedRef.current!
         const link = document.createElement('a')
         link.download = `drawing-${Date.now()}.png`
-        link.href = cv.toDataURL('image/png')
+        link.href = committedRef.current!.toDataURL('image/png')
         link.click()
         return
       }
@@ -383,8 +434,11 @@ export function Canvas() {
         e.preventDefault()
         const hist = historyRef.current
         if (!hist.length) return
-        const snap = hist.pop()!
-        committedRef.current!.getContext('2d')!.putImageData(snap, 0, 0)
+        for (const { layerId, data } of hist.pop()!) {
+          const cv = layerCanvasesRef.current.get(layerId)
+          if (cv) cv.getContext('2d')!.putImageData(data, 0, 0)
+        }
+        renderComposite()
         return
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
@@ -400,8 +454,8 @@ export function Canvas() {
         e.preventDefault()
         const data = clipboard.current
         const dpr  = dprRef.current
-        const cx   = (window.innerWidth  / 2 - panX.current) / zoomRef.current * dpr - data.width  / 2
-        const cy   = (window.innerHeight / 2 - panY.current) / zoomRef.current * dpr - data.height / 2
+        const cx = (window.innerWidth  / 2 - panX.current) / zoomRef.current * dpr - data.width  / 2
+        const cy = (window.innerHeight / 2 - panY.current) / zoomRef.current * dpr - data.height / 2
         if (floatingPaste.current) { saveSnapshot(); commitFloatingPaste() }
         floatingPaste.current = { data, x: Math.round(cx), y: Math.round(cy) }
         useDrawStore.getState().setTool('select')
@@ -425,7 +479,7 @@ export function Canvas() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [renderComposite, saveSnapshot, commitFloatingPaste, drawSelectionOverlay])
 
   // ── event setup ───────────────────────────────────────────────────────────
 
@@ -436,25 +490,33 @@ export function Canvas() {
 
     const resize = () => {
       const dpr = dprRef.current
-      const tmp = document.createElement('canvas')
-      tmp.width  = committed.width
-      tmp.height = committed.height
-      tmp.getContext('2d')!.drawImage(committed, 0, 0)
-
-      for (const cv of [committed, preview, cursor]) {
+      // resize each layer canvas preserving content
+      for (const [, cv] of layerCanvasesRef.current) {
+        const tmp = document.createElement('canvas')
+        tmp.width = cv.width; tmp.height = cv.height
+        tmp.getContext('2d')!.drawImage(cv, 0, 0)
+        cv.width  = window.innerWidth  * dpr
+        cv.height = window.innerHeight * dpr
+        cv.getContext('2d')!.drawImage(tmp, 0, 0)
+      }
+      for (const cv of [preview, cursor]) {
         cv.width  = window.innerWidth  * dpr
         cv.height = window.innerHeight * dpr
       }
-      committed.getContext('2d')!.drawImage(tmp, 0, 0)
+      committed.width  = window.innerWidth  * dpr
+      committed.height = window.innerHeight * dpr
+      renderComposite()
     }
     resize()
     window.addEventListener('resize', resize)
 
     const getPos = (e: PointerEvent): [number, number, number] => {
       const dpr = dprRef.current
-      const cx  = (e.clientX - panX.current) / zoomRef.current * dpr
-      const cy  = (e.clientY - panY.current) / zoomRef.current * dpr
-      return [cx, cy, e.pressure || 0.5]
+      return [
+        (e.clientX - panX.current) / zoomRef.current * dpr,
+        (e.clientY - panY.current) / zoomRef.current * dpr,
+        e.pressure || 0.5,
+      ]
     }
 
     const applyTransform = () => {
@@ -466,50 +528,55 @@ export function Canvas() {
       if (e.button === 1) {
         e.preventDefault()
         isPanning.current = true
-        panStart.current = { mx: e.clientX, my: e.clientY, px: panX.current, py: panY.current }
+        panStart.current  = { mx: e.clientX, my: e.clientY, px: panX.current, py: panY.current }
         overlayRef.current!.setPointerCapture(e.pointerId)
         return
       }
       if (e.button !== 0) return
       const [x, y, pressure] = getPos(e)
 
-      if (toolRef.current === 'select') {
-        const inFloat = floatingPaste.current &&
-          x >= floatingPaste.current.x && x <= floatingPaste.current.x + floatingPaste.current.data.width &&
-          y >= floatingPaste.current.y && y <= floatingPaste.current.y + floatingPaste.current.data.height
-        const inSel = !floatingPaste.current && selectionRect.current &&
-          x >= selectionRect.current.x && x <= selectionRect.current.x + selectionRect.current.w &&
-          y >= selectionRect.current.y && y <= selectionRect.current.y + selectionRect.current.h
+      // ── eyedropper ──
+      if (toolRef.current === 'eyedropper') {
+        const px = Math.round(x), py = Math.round(y)
+        if (px < 0 || py < 0 || px >= committed.width || py >= committed.height) return
+        const d   = committed.getContext('2d')!.getImageData(px, py, 1, 1).data
+        const hex = '#' + [d[0], d[1], d[2]].map(v => v.toString(16).padStart(2, '0')).join('')
+        const { setColor, addUsedColor } = useDrawStore.getState()
+        setColor(hex)
+        addUsedColor(hex)
+        return
+      }
 
-        if (inFloat) {
-          // arrastar paste flutuante
-          floatingDragOff.current = {
-            dx: x - floatingPaste.current!.x,
-            dy: y - floatingPaste.current!.y,
-          }
+      // ── selection ──
+      if (toolRef.current === 'select') {
+        const fp    = floatingPaste.current
+        const sr    = selectionRect.current
+        const inFp  = fp && x >= fp.x && x <= fp.x + fp.data.width && y >= fp.y && y <= fp.y + fp.data.height
+        const inSr  = !fp && sr && x >= sr.x && x <= sr.x + sr.w && y >= sr.y && y <= sr.y + sr.h
+
+        if (inFp) {
+          floatingDragOff.current = { dx: x - fp!.x, dy: y - fp!.y }
           overlayRef.current!.setPointerCapture(e.pointerId)
           return
         }
-
-        if (inSel) {
-          // levantar seleção do canvas (cut) e começar a mover
-          const { x: sx, y: sy, w, h } = selectionRect.current!
+        if (inSr) {
+          const { x: sx, y: sy, w, h } = sr!
           saveSnapshot()
-          const data = committed.getContext('2d')!.getImageData(sx, sy, w, h)
-          committed.getContext('2d')!.clearRect(sx, sy, w, h)
-          floatingPaste.current = { data, x: sx, y: sy }
-          selectionRect.current = null
+          const activeCanvas = getActiveLayerCanvas()
+          const data = activeCanvas.getContext('2d')!.getImageData(sx, sy, w, h)
+          activeCanvas.getContext('2d')!.clearRect(sx, sy, w, h)
+          floatingPaste.current   = { data, x: sx, y: sy }
+          selectionRect.current   = null
           floatingDragOff.current = { dx: x - sx, dy: y - sy }
+          renderComposite()
           drawSelectionOverlay()
           overlayRef.current!.setPointerCapture(e.pointerId)
           return
         }
-
-        // clicar fora: commit paste/seleção e começar nova seleção
-        if (floatingPaste.current) { saveSnapshot(); commitFloatingPaste() }
-        else if (selectionRect.current) {
+        if (fp) { saveSnapshot(); commitFloatingPaste() }
+        else if (sr) {
           selectionRect.current = null
-          previewRef.current!.getContext('2d')!.clearRect(0, 0, previewRef.current!.width, previewRef.current!.height)
+          preview.getContext('2d')!.clearRect(0, 0, preview.width, preview.height)
         }
         selStartCanvas.current = { x, y }
         selectionRect.current  = { x, y, w: 0, h: 0 }
@@ -517,22 +584,26 @@ export function Canvas() {
         return
       }
 
+      // ── fill ──
       if (toolRef.current === 'fill') {
         saveSnapshot()
         useDrawStore.getState().addUsedColor(colorRef.current)
-        floodFill(committed, x, y, colorRef.current)
+        floodFill(getActiveLayerCanvas(), x, y, colorRef.current)
+        renderComposite()
         return
       }
 
-      // linha reta: tool 'line' OU shift+click em qualquer tool de desenho
-      const isLineMode = toolRef.current === 'line' || (e.shiftKey && (toolRef.current === 'brush' || toolRef.current === 'eraser'))
+      // ── line ──
+      const isLineMode = toolRef.current === 'line' ||
+        (e.shiftKey && (toolRef.current === 'brush' || toolRef.current === 'eraser'))
       if (isLineMode) {
         if (!lineStart.current) {
           lineStart.current = [x, y]
         } else {
           saveSnapshot()
           if (toolRef.current !== 'eraser') useDrawStore.getState().addUsedColor(colorRef.current)
-          const ctx = committed.getContext('2d')!
+          const activeCanvas = getActiveLayerCanvas()
+          const ctx = activeCanvas.getContext('2d')!
           ctx.save()
           if (toolRef.current === 'eraser') ctx.globalCompositeOperation = 'destination-out'
           ctx.strokeStyle = toolRef.current === 'eraser' ? 'rgba(0,0,0,1)' : colorRef.current
@@ -544,7 +615,7 @@ export function Canvas() {
           ctx.stroke()
           ctx.globalCompositeOperation = 'source-over'
           ctx.restore()
-          // se shift ainda pressionado, encadeia próxima reta a partir deste ponto
+          renderComposite()
           if (e.shiftKey || toolRef.current === 'line') {
             lineStart.current = [x, y]
           } else {
@@ -555,12 +626,11 @@ export function Canvas() {
         return
       }
 
+      // ── brush / eraser ──
       overlayRef.current!.setPointerCapture(e.pointerId)
       isDrawing.current = true
-      points.current = [[x, y, pressure]]
-      // render imediatamente pra capturar cliques sem movimento
-      const fill = toolRef.current === 'eraser' ? 'rgba(0,0,0,1)' : colorRef.current
-      renderStroke(points.current, fill)
+      points.current    = [[x, y, pressure]]
+      renderStroke(points.current, toolRef.current === 'eraser' ? 'rgba(0,0,0,1)' : colorRef.current)
     }
 
     const onMove = (e: PointerEvent) => {
@@ -584,8 +654,7 @@ export function Canvas() {
           return
         }
         if (selStartCanvas.current) {
-          const sx = selStartCanvas.current.x
-          const sy = selStartCanvas.current.y
+          const { x: sx, y: sy } = selStartCanvas.current
           selectionRect.current = {
             x: Math.min(sx, x), y: Math.min(sy, y),
             w: Math.abs(x - sx), h: Math.abs(y - sy),
@@ -613,8 +682,7 @@ export function Canvas() {
 
       if (!isDrawing.current) return
       points.current = [...points.current, [x, y, pressure]]
-      const fill = toolRef.current === 'eraser' ? 'rgba(0,0,0,1)' : colorRef.current
-      renderStroke(points.current, fill)
+      renderStroke(points.current, toolRef.current === 'eraser' ? 'rgba(0,0,0,1)' : colorRef.current)
     }
 
     const onUp = (e: PointerEvent) => {
@@ -634,19 +702,20 @@ export function Canvas() {
     }
 
     const overlay = overlayRef.current!
-    overlay.addEventListener('pointerdown', onDown)
-    overlay.addEventListener('pointermove', onMove)
-    overlay.addEventListener('pointerup',   onUp)
+    overlay.addEventListener('pointerdown',  onDown)
+    overlay.addEventListener('pointermove',  onMove)
+    overlay.addEventListener('pointerup',    onUp)
     overlay.addEventListener('pointerleave', onLeave)
 
     return () => {
       window.removeEventListener('resize', resize)
-      overlay.removeEventListener('pointerdown', onDown)
-      overlay.removeEventListener('pointermove', onMove)
-      overlay.removeEventListener('pointerup',   onUp)
+      overlay.removeEventListener('pointerdown',  onDown)
+      overlay.removeEventListener('pointermove',  onMove)
+      overlay.removeEventListener('pointerup',    onUp)
       overlay.removeEventListener('pointerleave', onLeave)
     }
-  }, [renderStroke, commitStroke, drawCursor, drawSelectionOverlay, commitFloatingPaste, saveSnapshot])
+  }, [renderStroke, commitStroke, drawCursor, drawSelectionOverlay,
+      commitFloatingPaste, saveSnapshot, renderComposite, getActiveLayerCanvas])
 
   const shared: React.CSSProperties = { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }
 
@@ -657,7 +726,6 @@ export function Canvas() {
         <canvas ref={previewRef}   style={shared} />
         <canvas ref={cursorRef}    style={shared} />
       </div>
-      {/* overlay full-screen fora do wrapper transformado — captura eventos em qualquer zoom */}
       <div ref={overlayRef} style={{ position: 'absolute', inset: 0, cursor: 'none', zIndex: 5 }} />
     </div>
   )

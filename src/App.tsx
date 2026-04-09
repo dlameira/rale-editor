@@ -2,11 +2,14 @@ import { useEffect } from 'react'
 import { Canvas } from './components/Canvas'
 import { Toolbar } from './components/Toolbar'
 import { FloatingPalette } from './components/FloatingPalette'
+import { LayersPanel } from './components/LayersPanel'
 import { useDrawStore } from './store/useDrawStore'
 
 export default function App() {
-  const setTool        = useDrawStore(s => s.setTool)
-  const setBrushShape  = useDrawStore(s => s.setBrushShape)
+  const setTool       = useDrawStore(s => s.setTool)
+  const setBrushShape = useDrawStore(s => s.setBrushShape)
+  const setShowLayers = useDrawStore(s => s.setShowLayers)
+  const showLayers    = useDrawStore(s => s.showLayers)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -15,28 +18,31 @@ export default function App() {
       switch (e.key.toLowerCase()) {
         case 'b': {
           const { tool, brushShape } = useDrawStore.getState()
-          if (tool === 'brush') {
-            setBrushShape(brushShape === 'round' ? 'square' : 'round')
-          } else {
-            setTool('brush')
-          }
+          if (tool === 'brush') setBrushShape(brushShape === 'round' ? 'square' : 'round')
+          else setTool('brush')
           break
         }
-        case 'g': setTool('fill');   break
-        case 'e': setTool('eraser'); break
-        case 'l': setTool('line');   break
-        case 's': setTool('select'); break
+        case 'g': setTool('fill');        break
+        case 'e': setTool('eraser');      break
+        case 'l': setTool('line');        break
+        case 's': setTool('select');      break
+        case 'i': setTool('eyedropper'); break
+        case 'tab':
+          e.preventDefault()
+          setShowLayers(!showLayers)
+          break
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [setTool, setBrushShape])
+  }, [setTool, setBrushShape, setShowLayers, showLayers])
 
   return (
     <div style={{ width: '100vw', height: '100vh', background: '#000', overflow: 'hidden', position: 'relative' }}>
       <Canvas />
       <Toolbar />
       <FloatingPalette />
+      <LayersPanel />
     </div>
   )
 }
