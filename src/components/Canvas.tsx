@@ -435,12 +435,13 @@ export function Canvas() {
         return
       }
       e.preventDefault()
+      const minZoom = Math.max(window.innerWidth / DOC_W, window.innerHeight / DOC_H)
       const factor  = e.deltaY < 0 ? 1.12 : 1 / 1.12
-      const newZoom = Math.min(Math.max(zoomRef.current * factor, 0.05), 20)
+      const newZoom = Math.min(Math.max(zoomRef.current * factor, minZoom), 20)
       const cx = (e.clientX - panX.current) / zoomRef.current
       const cy = (e.clientY - panY.current) / zoomRef.current
-      panX.current    = e.clientX - cx * newZoom
-      panY.current    = e.clientY - cy * newZoom
+      panX.current    = Math.min(0, Math.max(e.clientX - cx * newZoom, window.innerWidth  - DOC_W * newZoom))
+      panY.current    = Math.min(0, Math.max(e.clientY - cy * newZoom, window.innerHeight - DOC_H * newZoom))
       zoomRef.current = newZoom
       applyTransform()
     }
@@ -591,11 +592,11 @@ export function Canvas() {
     committed.width = preview.width = cursor.width  = DOC_W
     committed.height = preview.height = cursor.height = DOC_H
 
-    // initial zoom/pan: fit document centered in viewport
-    const initZoom  = Math.min(window.innerWidth / DOC_W, window.innerHeight / DOC_H) * 0.95
+    // initial zoom/pan: fill viewport (no black borders)
+    const initZoom  = Math.max(window.innerWidth / DOC_W, window.innerHeight / DOC_H)
     zoomRef.current = initZoom
-    panX.current    = (window.innerWidth  - DOC_W * initZoom) / 2
-    panY.current    = (window.innerHeight - DOC_H * initZoom) / 2
+    panX.current    = Math.min(0, Math.max((window.innerWidth  - DOC_W * initZoom) / 2, window.innerWidth  - DOC_W * initZoom))
+    panY.current    = Math.min(0, Math.max((window.innerHeight - DOC_H * initZoom) / 2, window.innerHeight - DOC_H * initZoom))
 
     const applyTransform = () => {
       wrapperRef.current!.style.transform =
@@ -721,8 +722,9 @@ export function Canvas() {
 
     const onMove = (e: PointerEvent) => {
       if (isPanning.current) {
-        panX.current = panStart.current.px + e.clientX - panStart.current.mx
-        panY.current = panStart.current.py + e.clientY - panStart.current.my
+        const zoom = zoomRef.current
+        panX.current = Math.min(0, Math.max(panStart.current.px + e.clientX - panStart.current.mx, window.innerWidth  - DOC_W * zoom))
+        panY.current = Math.min(0, Math.max(panStart.current.py + e.clientY - panStart.current.my, window.innerHeight - DOC_H * zoom))
         applyTransform()
         return
       }
@@ -808,12 +810,7 @@ export function Canvas() {
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
       <div
         ref={wrapperRef}
-        style={{
-          position: 'absolute', top: 0, left: 0,
-          width: DOC_W, height: DOC_H,
-          transformOrigin: '0 0',
-          boxShadow: '0 0 0 1px #333, 0 8px 32px rgba(0,0,0,0.6)',
-        }}
+        style={{ position: 'absolute', top: 0, left: 0, width: DOC_W, height: DOC_H, transformOrigin: '0 0' }}
       >
         <canvas ref={committedRef} style={shared} />
         <canvas ref={previewRef}   style={shared} />
