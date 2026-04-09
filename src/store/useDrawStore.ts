@@ -37,6 +37,7 @@ interface DrawStore {
   setActiveLayer:      (id: string) => void
   moveLayerUp:         (id: string) => void
   moveLayerDown:       (id: string) => void
+  reorderLayers:       (fromId: string, toIndex: number) => void
   setShowLayers:       (v: boolean) => void
 }
 
@@ -100,6 +101,16 @@ export const useDrawStore = create<DrawStore>((set, get) => ({
     if (i >= layers.length - 1) return
     const next = [...layers]
     ;[next[i], next[i + 1]] = [next[i + 1], next[i]]
+    set({ layers: next })
+  },
+
+  reorderLayers: (fromId, toIndex) => {
+    const { layers } = get()
+    const fromIndex = layers.findIndex(l => l.id === fromId)
+    if (fromIndex === -1 || fromIndex === toIndex) return
+    const next = [...layers]
+    const [removed] = next.splice(fromIndex, 1)
+    next.splice(toIndex > fromIndex ? toIndex - 1 : toIndex, 0, removed)
     set({ layers: next })
   },
 
